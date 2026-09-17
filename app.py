@@ -1,6 +1,7 @@
-import os
+        import os
 import fitz  # PyMuPDF
 import streamlit as st
+import xml.sax.saxutils
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -12,7 +13,7 @@ st.set_page_config(page_title="Smart Study Note Generator", page_icon="📚", la
 def extract_content_from_pdf(uploaded_file, max_file_size_mb=100):
     """
     Validates file size, reads up to 100MB, and extracts text block-by-block 
-    along with its precise page number.
+    along with its precise page number, escaping special XML characters.
     """
     file_size_mb = uploaded_file.size / (1024 * 1024)
     if file_size_mb > max_file_size_mb:
@@ -21,27 +22,27 @@ def extract_content_from_pdf(uploaded_file, max_file_size_mb=100):
 
     extracted_data = []
     
-    # Open the uploaded PDF stream directly using PyMuPDF
     with fitz.open(stream=uploaded_file.read(), filetype="pdf") as doc:
         for page_num, page in enumerate(doc, start=1):
             text = page.get_text()
             if text.strip():
-                # Simple heuristic block splitter: breaking text into paragraphs
                 paragraphs = text.split('\n\n')
                 for p in paragraphs:
                     cleaned_p = p.strip().replace('\n', ' ')
-                    if len(cleaned_p) > 40:  # Filter out short fragments/headers
+                    if len(cleaned_p) > 40:
+                        # Escape special characters (&, <, >) to prevent ReportLab XML parser crashes
+                        safe_text = xml.sax.saxutils.escape(cleaned_p)
                         extracted_data.append({
                             "page": page_num,
-                            "content": cleaned_p
+                            "content": safe_text
                         })
                         
     return extracted_data
 
-def generate_styled_notes_pdf(notes_data, font_choice="Helvetica", body_font_size=10, title_font_size=24, output_filename="Structured_Study_Notes.pdf"):
+def generate_styled_notes_pdf(notes_data, output_filename="Structured_Study_Notes.pdf"):
     """
-    Compiles extracted text into a designed, publication-quality PDF note sheet 
-    complete with custom fonts, sizes, and visual infographic callout blocks.
+    Compiles extracted text into a designed PDF note sheet 
+    complete with visual infographic callout blocks and page references.
     """
     doc = SimpleDocTemplate(
         output_filename,
@@ -52,58 +53,41 @@ def generate_styled_notes_pdf(notes_data, font_choice="Helvetica", body_font_siz
     
     styles = getSampleStyleSheet()
     
-    # Define bold variant based on selected font family
-    bold_font = f"{font_choice}-Bold"
-    
-    # Custom Typography & Styles using user parameters
     title_style = ParagraphStyle(
         'DocTitle',
         parent=styles['Heading1'],
-        fontName=bold_font,
-        fontSize=title_font_size,
+        fontName='Helvetica-Bold',
+        fontSize=24,
         textColor=colors.HexColor("#1A365D"),
         spaceAfter=15
-    )
-    
-    heading_style = ParagraphStyle(
-        'SectionHeading',
-        parent=styles['Heading2'],
-        fontName=bold_font,
-        fontSize=max(body_font_size + 4, 12),
-        textColor=colors.HexColor("#2B6CB0"),
-        spaceBefore=10,
-        spaceAfter=6
     )
     
     body_style = ParagraphStyle(
         'BodyDark',
         parent=styles['Normal'],
-        fontName=font_choice,
-        fontSize=body_font_size,
-        leading=body_font_size + 4,
+        fontName='Helvetica',
+        fontSize=10,
+        leading=14,
         textColor=colors.HexColor("#2D3748")
     )
     
     page_badge_style = ParagraphStyle(
         'PageBadge',
         parent=styles['Normal'],
-        fontName=bold_font,
-        fontSize=max(body_font_size - 1, 8),
+        fontName='Helvetica-Bold',
+        fontSize=9,
         textColor=colors.HexColor("#FFFFFF"),
-        alignment=1  # Centered
+        alignment=1
     )
 
     story = []
     
-    # Document Header
     story.append(Paragraph("📖 Master Study Notes & Core Insights", title_style))
     story.append(Paragraph("Auto-generated summary extracted directly from uploaded materials with source tracking.", body_style))
     story.append(Spacer(1, 15))
     
-    # Grouping/Structuring notes into decorated infographic rows
-    for idx, item in enumerate(notes_data[:40], start=1):  
+    for idx, item in enumerate(notes_data[:40], start=1):
         page_text = f"P. {item['page']}"
-        
         badge_p = Paragraph(page_text, page_badge_style)
         content_p = Paragraph(f"<b>Core Point #{idx}:</b> {item['content'][:300]}...", body_style)
         
@@ -125,17 +109,7 @@ def generate_styled_notes_pdf(notes_data, font_choice="Helvetica", body_font_siz
 
 # --- Streamlit UI Design ---
 st.title("📚 Automated Smart Study Notes Generator")
-st.markdown("Upload any book, textbook, or PDF (up to **100MB**). Customize your typography in the sidebar, and generate structured infographic notes.")
-
-# Sidebar Customization Controls
-st.sidebar.header("⚙️ PDF Customization")
-selected_font = st.sidebar.selectbox(
-    "Choose Font Family",
-    options=["Helvetica", "Times-Roman", "Courier"],
-    index=0
-)
-body_font_size = st.sidebar.slider("Body Font Size", min_value=8, max_value=14, value=10)
-title_font_size = st.sidebar.slider("Title Font Size", min_value=16, max_value=32, value=24)
+st.markdown("Upload any book, textbook, or PDF (up to **100MB**). The engine will extract key concepts, organize them into visual infographic blocks with exact page numbers, and supply a direct download path.")
 
 uploaded_file = st.file_uploader("Choose a PDF file", type=["pdf"])
 
@@ -147,15 +121,9 @@ if uploaded_file is not None:
             extracted = extract_content_from_pdf(uploaded_file, max_file_size_mb=100)
             
             if extracted:
-                output_pdf_path = generate_styled_notes_pdf(
-                    extracted, 
-                    font_choice=selected_font, 
-                    body_font_size=body_font_size, 
-                    title_font_size=title_font_size
-                )
+                output_pdf_path = generate_styled_notes_pdf(extracted)
                 st.success("Notes generated successfully!")
                 
-                # Provide Download Button / Path
                 with open(output_pdf_path, "rb") as pdf_file:
                     st.download_button(
                         label="📥 Download Structured Notes (PDF)",
